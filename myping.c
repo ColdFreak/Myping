@@ -77,6 +77,7 @@ char *icmp_unreach_str[16] =
 
 #define EV_TYPE_PING 1
 #define EV_TYPE_TIMEOUT 2
+
 typedef struct host_entry {
 	char *name; /* name as given by user*/
 	char *host; /* text description of host*/
@@ -421,25 +422,31 @@ void ev_enqueue(HOST_ENTRY *h) {
 
 	i = ev_last;
 	while(1) {
+
 		i_prev = i->ev_prev;
+
 		if(i_prev == NULL || h->ev_time.tv_sec > i_prev->ev_time.tv_sec || (h->ev_time.tv_sec == i_prev->ev_time.tv_sec && h->ev_time.tv_usec >= i_prev->ev_time.tv_usec)) {
+
 			h->ev_prev = i_prev;
+
 			h->ev_next = i;
+
 			i->ev_prev = h;
+
 			if(i_prev != NULL) {
+
 				i_prev->ev_next = h;
+
 			}
 			else 
+
 				ev_first = h;
+
 			return;
 		}
+
 		i = i_prev;
 	}
-}
-
-
-
-
 }
 
 void finish() {
@@ -452,3 +459,90 @@ void finish() {
 		exit(2);
 	exit(0)
 }
+
+void add_range( char *start, char *end) {
+
+	struct addrinfo addr_hints;
+	
+	struct addrinfo *addr_res;
+	
+	unsigned long start_long;
+
+	unsigned long end_long;
+
+	int ret;
+
+	memset(&addr_hints, 0, sizeof(struct addrinfo));
+
+	addr_hints.ai_family = AF_UNSPEC;
+
+	addr_hints.ai_flags = AI_NUMERICHOST;
+
+	/* int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res);*/
+	ret = getaddrinfo(start, NULL, &addr_hints, &addr_res);
+
+	if(ret) {
+
+		fprintf(stderr, "Error: can't parse address %s: %s\n", start, gai_strerror(ret));
+
+		exit(2);
+	}
+
+	if(addr_res->ai_family != AF_INET) {
+
+		fprintf(stderr, "Error, -g works only with IPv4 addresses\n");
+
+		exit(2);
+	}
+	
+	/* struct sockaddr *ai_addr */
+	start_long = ntohl(((struct sockaddr_in *)addr_res->ai_addr)->sin_addr.s_addr);
+
+	memset(&addr_hints, 0, sizeof(struct addrinfo));
+
+	addr_hints.ai_family = AF_UNSPEC;
+
+	addr_hints.ai_flags = AI_NUMERICHOST;
+
+	ret = getaddrinfo(end, NULL, &addr_hints, &addr_res);
+
+	if(ret) {
+
+		fprintf(stderr, "Error: can't parse address %s: %s\n", end, gai_strerror(ret));
+
+		exit(2);
+	}
+
+	if(addr_res->ai_family != AF_INET) {
+
+		fprintf(stderr, "Error, -g works only with IPv4 addresses\n");
+
+		exit(2);
+	}
+
+	end_long = ntohl(((struct sockaddr_in)addr_res->ai_addr)->sin_addr.s_addr);
+
+	/* generate */
+
+	while(start_long <= end_long) {
+
+		struct in_addr in_addr_tmp;
+
+		char buffer[20];
+
+		in_addr_tmp.s_addr = htonl(start_long);
+
+		/*inet_ntop - convert IPv4 and IPv6 addresses from binary to text form */
+		inet_ntop(AF_INET, &in_addr_tmp, buffer, sizeof(buffer));
+
+		add_name(buffer);
+
+		start_long++;
+	}
+
+}
+
+
+
+
+
