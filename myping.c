@@ -253,10 +253,12 @@ void add_cidr(char * addr) {
 		fprintf(stderr, "Error: netmask must be between 1 and 30(is: %s)\n",mask_str);
 		exit(2);
 	}
-
+	
 	memset(&addr_hints, 0, sizeof(struct addrinfo));
 	addr_hints.ai_family = AF_UNSPEC;
 	addr_hints.ai_flags = AI_NUMERICHOST;
+	
+	/*从这时开始对给出的地址范围，一个一个查找，放入addr_res */
 	ret = getaddrinfo(addr, NULL, &addr_hints, &addr_res);
 	if(ret) {
 		fprintf(stderr, "Error: can't parse address %s: %s\n",addr, gai_strerror(ret));
@@ -267,7 +269,8 @@ void add_cidr(char * addr) {
 		fprintf(stderr, "Error: -g works only with IPv4 addresses\n");
 		exit(2);
 	}
-
+	
+	/*将从服务器上取得的地址(一个无符号整数)转为host byte order*/
 	net_addr = ntohl(((struct sockaddr_in *)addr_res->ai_addr)->sin_addr.s_addr);
 
 	bitmask = ((unsigned long)0xFFFFFFFF) << ( 32 - mask);
@@ -282,7 +285,9 @@ void add_cidr(char * addr) {
 
 		struct in_addr in_addr_temp;
 		char buffer[20];
+		/* 这又将无符号整数转为network byte order */
 		in_adr_temp.s_addr = htonl(net_addr);
+		/* buffer 中最终填充的是类似 192.168.1.100 */
 		inet_ntop(AF_INET, &in_addr_temp, buffer, sizeof(buffer));
 		add_name(buffer); /* now buffer should be a dotted decimal IP address */
 	}
@@ -330,7 +335,8 @@ void add_name (char *name ) {
 	struct in_addr *host_add;
 	char *nm;
 	int i = 0;
-
+	
+	/*将 192.168.1.100 转为二进制， network byte order */
 	if( (ipaddress = inet_addr(name)) != -1) {
 
 		add_addr(name, name, *ipa);
