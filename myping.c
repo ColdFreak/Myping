@@ -27,6 +27,7 @@
 #define DNS_TIMEOUT 1000 /* micro sec */
 #define DEFAULT_PING_DATA_SIZE 56
 #define SIZE_ICMP_HDR ICMP_MINLEN /* FROM ip_icmp.h */
+#define DEFAULT_INTERVAL 25
 
 
 extern char *optarg;
@@ -103,9 +104,11 @@ char *prog;
 int ident; /* our pid */
 int s; /* socket */
 
+/* times get *100 because all times are calculated in 10 usec units, not ms */
 unsigned int timeout = DEFAULT_TIMEOUT * 100;
 unsigned int ping_pkt_size;
 unsigned int ping_data_size = DEFAULT_PING_DATA_SIZE;
+unsigned int interval = DEFAULT_INTERVAL * 100;
 
 /* global stas */
 int max_hostname_len = 0;
@@ -117,6 +120,7 @@ struct timeval current_time
 struct timeval start_time;
 struct timeval end_time;
 struct timezone tz;
+struct timeval last_send_time; /* time last ping was sent*/
 
 /* switches */
 int generate_flag = 0; 
@@ -200,6 +204,8 @@ int main ( int argc, char **argv) {
 
 	gettimeofday(&start_time, &tz);
 	current_time = start_time;
+
+	last_send_time.tv_sec = current_time.tv_sec - 10000;
 
 	main_loop();
 	finish();
@@ -542,7 +548,83 @@ void add_range( char *start, char *end) {
 
 }
 
+void main_loop() {
 
+	long lt;
+
+	long wait_time;
+	
+	HOST_ENTRY *h;
+
+	while(ev_first) {
+
+		/* current_time is a global variable 
+		 * right before main_loop() in line 202*/
+		if(ev_first->ev_time.tv_sec < current_time.tv_sec || (ev_first->ev_time.tv_sec == current_time.tv_sec && ev_first->ev_time.tv_usec < current_time.tv_usec)) {
+			
+			if(ev_first->ev_type == EV_TYPE_PING) {
+
+				lt = timeval_diff(&current_time, &last_send_time);
+
+				/**/
+				if(lt < interval ) goto wait_for_reply;
+
+				h = ev_dequeue();
+
+				/* Send the ping
+				 * printf("Sending ping after %d ms\n",lt/100);*/
+				if(!send_ping(s,h)) goto wait_for_reply;
+			}
+			else if(ev_first->ev_type == EV_TYPE_TIMEOUT) {
+
+				num_timeout++;
+
+				remove_job(ev_first);
+			}
+		}
+
+wait_for_reply:
+
+		/* when can we expect the next event */
+		if(ev_first) {
+
+			if(ev_first->ev_time.tv_sec == 0) {
+
+				wait_time = 0;
+			}
+			else {
+				wait_time = timeval_diff(&ev_first->ev_time, &current_time);
+				if(wait_time < 0) 
+
+					wait_time = 0;
+			}
+
+			if(ev_first->ev_type == EV_TYPE_PING) {
+
+				if(wait_time < interval) {
+
+					lt = timeval_diff(&current_time, &last_send_time);
+
+					if(lt < interval)
+
+						wait_time = interval-lt;
+					else
+						wait_time = 0;
+				}
+			}
+		}
+
+		else 
+			wait_time = interval;
+
+		if(wait_for_reply(wait_time)) {
+
+			while(wait_for_reply(0))
+				;
+		}
+		gettimeofday(&current_time, &tz);
+	}
+}
 
 
 
