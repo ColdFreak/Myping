@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <error.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -15,21 +16,29 @@
 #define BUFSIZE	1500
 
 char *host;
+int sockfd;
 pid_t pid;
 int datalen = 56;
 char sendbuf[BUFSIZE];
 int nsent = 0;
 
+struct addrinfo hints;
+struct addrinfo *res;
+struct sockaddr *sasend;
+struct sockaddr *sarecv;
+
 uint16_t in_cksum(uint16_t *addr, int len);
+void sig_alrm(int signo);
+void send_v4(void);
+void readloop(void);
+
 int main(int argc, char **argv) {
-	struct addrinfo hints, *res;
-	char h[128];
-	int n;
-	struct sockaddr_in *sin;
-	char *buffer;
 	struct icmp *icmp;
-	int len;
-	int sockfd;
+	struct sockaddr_in *sin;
+	socklen_t salen;
+	char h[128];
+	int n; /* getaddrinfo return value */
+	char *buffer;
 
 	if(argc != 2) {
 		perror("usage: ./ping <hostname>");
@@ -38,7 +47,8 @@ int main(int argc, char **argv) {
 
 	host = argv[1];
 	pid = getpid() & 0xffff;
-//	signal(SIGALRM, sig_alrm); 
+
+	signal(SIGALRM, sig_alrm); 
 
 	bzero(&hints, sizeof(struct addrinfo));
 	hints.ai_flags = AI_CANONNAME;
@@ -61,34 +71,7 @@ int main(int argc, char **argv) {
 			exit (1);
 	}
 	printf("PING %s (%s): %d data bytes\n",res->ai_canonname ? res->ai_canonname:h, h, datalen);
-	// create socket from here
-	if(res->ai_family == AF_INET) {
-		if((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0) {
-			perror("socket");
-			exit(1);
-		}
-	}
-	else {
-		fprintf(stderr,"unknown address family %d", res->ai_family);
-		exit (1);
-	}
-	setuid(getuid());
 
-
-
-	icmp = (struct icmp *)sendbuf;
-	icmp->icmp_type = ICMP_ECHO;
-	icmp->icmp_code = 0;
-	icmp->icmp_seq = nsent++;
-	icmp->icmp_id = pid;
-	memset(icmp->icmp_data,0, datalen);
-	if(gettimeofday((struct timeval *)icmp->icmp_data, NULL) < 0) {
-		perror("gettimeofday");
-		exit (1);
-	}
-	len = 8 + datalen;
-	icmp->icmp_cksum = 0;
-	icmp->icmp_cksum = in_cksum((u_short *)icmp,len); 
 	return 0;
 }
 
@@ -111,3 +94,88 @@ uint16_t in_cksum(uint16_t *addr, int len) {
 	answer = ~sum;
 	return (answer);
 }
+void send_v4(void) {
+	struct icmp *icmp;
+	int len;
+	socklen_t salen;
+	icmp = (struct icmp *)sendbuf;
+	icmp->icmp_type = ICMP_ECHO;
+	icmp->icmp_code = 0;
+	icmp->icmp_seq = nsent++;
+	icmp->icmp_id = pid;
+	memset(icmp->icmp_data,0, datalen);
+	if(gettimeofday((struct timeval *)icmp->icmp_data, NULL) < 0) {
+		perror("gettimeofday");
+		exit (1);
+	}
+	len = 8 + datalen;
+	icmp->icmp_cksum = 0;
+	icmp->icmp_cksum = in_cksum((u_short *)icmp,len); 
+
+	sasend = res->ai_addr;
+	salen = res->ai_addrlen;
+	if(sendto(sockfd, sendbuf, len, 0, sasend, salen) != len) {
+		perror("sendto");
+		exit(1);
+	}
+}
+void readloop(void) {
+	int n;
+	int size;
+	char recvbuf[BUFSIZE];
+	char controlbuf[BUFSIZE];
+	struct msghdr msg;
+	struct iovec iov;
+	struct timeval tval;
+	
+
+	// create socket from here
+	if(res->ai_family == AF_INET) {
+		if((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0) {
+			perror("socket");
+			exit(1);
+		}
+	}
+	else {
+		fprintf(stderr,"unknown address family %d", res->ai_family);
+		exit (1);
+	}
+	setuid(getuid());
+	
+	size = 60 * 1024;
+	setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+	sig_alrm(SIGALRM); /* send the first packet */
+
+	iov.iov_base = recvbuf;
+	iov.iov_len = sizeof(recvbuf);
+	msg.msg_name = sarecv;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = controlbuf;
+
+	for( ; ; ) {/* now receive message after sending packet */
+		n = recvmsg(sockfd, &msg, 0);
+		if( n < 0) {
+			if(errno == EINTR ) 
+				continue;
+			else {
+				perror("recvmsg");
+				exit(1);
+			}
+		}
+		if(gettimeofday(&tval, NULL) < 0) {
+			perror("gettimeofday");
+			exit (1);
+		}
+		proc_v4(recvbuf, n, &msg, &tval);
+	}
+}
+
+void sig_alrm(int signo) {
+	send_v4();
+	alarm(1);
+	return ;
+}
+
+
+
